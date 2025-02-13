@@ -1,0 +1,28 @@
+#ifndef BUFFER_H
+#define BUFFER_H
+
+#include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/ringbuf.h"
+#include "freertos/semphr.h"
+
+
+typedef struct {
+  struct {
+    void* storage;
+    StaticRingbuffer_t* buffer;
+  } staticAllocation;
+  RingbufHandle_t *buffer;
+  size_t vectorSize;
+  size_t vectorMaxNumber;
+  SemaphoreHandle_t *mutex;
+}vectorBuffer_t;
+
+
+esp_err_t initBuffer(vectorBuffer_t *buffer, size_t itemSize, size_t maxItemNumber);
+esp_err_t deinitBuffer(vectorBuffer_t *buffer);
+//esp_err_t pushItem(vectorBuffer_t *buffer, void *item) ;
+//esp_err_t pullItem(vectorBuffer_t *buffer, void *item);
+esp_err_t pullItem(vectorBuffer_t *buffer, void *item, size_t itemLogicalSize);
+esp_err_t pushItem(vectorBuffer_t *buffer, void *item, size_t itemLogicalSize);
+#endif

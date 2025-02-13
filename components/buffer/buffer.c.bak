@@ -1,0 +1,287 @@
+// #include "buffer.h"
+
+// #include "esp_heap_caps.h"
+// #include "esp_log.h"
+// #include "freertos/semphr.h"
+// #include "string.h"
+
+// static const char *TAG = "BUFFER";
+
+// /**
+//  *  Public Functions
+//  *
+//  */
+// esp_err_t initBuffer(vectorBuffer_t *buffer, size_t itemSize,
+//                      size_t maxItemNumber) {
+//   if (buffer == NULL) return ESP_FAIL;
+
+//   size_t _32bitsPaddedSize = (itemSize * maxItemNumber + 3) & ~0x03;
+
+//   buffer->staticAllocation.buffer =
+//       heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_32BIT);
+//   if (buffer->staticAllocation.buffer == NULL)
+//     return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+
+//   buffer->staticAllocation.storage =
+//       heap_caps_malloc(_32bitsPaddedSize, MALLOC_CAP_32BIT);
+//   if (buffer->staticAllocation.storage == NULL)
+//     return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+
+//   ESP_LOGD(TAG, "Alignment of StaticRingbuffer_t: %zu\n",
+//            __alignof__(buffer->staticAllocation.buffer));
+//   ESP_LOGD(TAG, "Alignment of buffer static storage: %zu\n",
+//            __alignof__(buffer->staticAllocation.storage));
+
+//   buffer->buffer = xRingbufferCreateStatic(
+//       _32bitsPaddedSize, RINGBUF_TYPE_NOSPLIT,
+//       buffer->staticAllocation.storage, buffer->staticAllocation.buffer);
+//   if (buffer->buffer == NULL) return ESP_FAIL;
+
+//   buffer->vectorMaxNumber = maxItemNumber;
+//   buffer->vectorSize =
+//   ;
+
+//   buffer->mutex = xSemaphoreCreateMutex();
+
+//   configASSERT(buffer->mutex);
+//   return ESP_OK;
+// }
+
+// esp_err_t deinitBuffer(vectorBuffer_t *buffer) {
+//   vRingbufferDelete(buffer->buffer);
+//   free(buffer->staticAllocation.buffer);
+//   free(buffer->staticAllocation.storage);
+//   free(buffer->mutex);
+//   return ESP_OK;
+// }
+
+// esp_err_t pushItem(vectorBuffer_t *buffer, void *item) {
+//   configASSERT(item);
+//   configASSERT(buffer);
+//   configASSERT(buffer->buffer);
+
+//   if (xSemaphoreTake(buffer->mutex, 5) == pdTRUE) {
+//     size_t freeItems =
+//         xRingbufferGetMaxItemSize(buffer->buffer) / buffer->vectorSize;
+
+//     size_t dataSize;
+//     if (freeItems == 0) {
+//       vRingbufferReturnItem(buffer->buffer,
+//                             xRingbufferReceive(buffer->buffer, &dataSize,
+//                             5));
+//     }
+
+//     // void *itemRequest;
+//     // if (xRingbufferSendAcquire(buffer->buffer, &itemRequest,
+//     // buffer->vectorSize,
+//     //                            5) == pdFALSE) {
+//     //   return ESP_FAIL;
+//     // }
+//     // configASSERT(itemRequest);
+
+//     // mempcpy(itemRequest, item, buffer->vectorSize);
+
+//     // if (xRingbufferSendComplete(buffer->buffer, itemRequest) == pdFALSE) {
+//     //   return ESP_FAIL;
+//     // }
+
+//     ESP_LOGI(TAG, "Buffer info. Buffer ptr %p", buffer);
+//     ESP_LOGI(TAG, "Buffer info. Buffer ptr %p", buffer->buffer);
+//     ESP_LOGI(TAG, "Buffer info. Buffer vector size %u", buffer->vectorSize);
+//     ESP_LOG_BUFFER_HEX_LEVEL(TAG, item, buffer->vectorSize, ESP_LOG_INFO);
+
+//     if (xRingbufferSend(buffer->buffer, item, buffer->vectorSize, 10) ==
+//         pdFALSE) {
+//       xSemaphoreGive(buffer->mutex);
+//       return ESP_FAIL;
+//     }
+
+//     xSemaphoreGive(buffer->mutex);
+//     return ESP_OK;
+//   }
+
+//   return ESP_FAIL;
+// }
+
+// esp_err_t pullItem(vectorBuffer_t *buffer, void *item) {
+//   configASSERT(item);
+//   configASSERT(buffer);
+//   configASSERT(buffer->buffer);
+
+//   size_t itemSize;
+
+//   if (xSemaphoreTake(buffer->mutex, 5) == pdTRUE) {
+//     void *itemCopy = xRingbufferReceive(buffer->buffer, &itemSize, 1);
+//     if (itemCopy == NULL) return ESP_ERR_TIMEOUT;
+//     if (itemSize != buffer->vectorSize) return ESP_ERR_INVALID_RESPONSE;
+
+//     memcpy(item, itemCopy, buffer->vectorSize);
+//     vRingbufferReturnItem(buffer->buffer, itemCopy);
+//     xSemaphoreGive(buffer->mutex);
+//     return ESP_OK;
+//   }
+
+//   return ESP_FAIL;
+// }
+
+#include "buffer.h"
+
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "freertos/semphr.h"
+#include "string.h"
+
+static const char *TAG = "BUFFER";
+
+/* Helper to round up to the next multiple of 4 */
+static inline size_t padSize(size_t size) { return (size + 3) & ~0x03; }
+
+/**
+ *  Public Functions
+ *
+ */
+esp_err_t initBuffer(vectorBuffer_t *buffer, size_t itemSize, size_t maxItemNumber) {
+    if (buffer == NULL) return ESP_FAIL;
+
+    /* Use padded item size for ring buffer operations */
+    size_t paddedItemSize = padSize(itemSize);
+    size_t totalSize = paddedItemSize * maxItemNumber;
+
+    /* Allocate the control structure for the ring buffer.
+       Zero it so that all fields are properly initialized. */
+    buffer->staticAllocation.buffer =
+        heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_32BIT);
+    if (buffer->staticAllocation.buffer == NULL)
+        return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+    memset(buffer->staticAllocation.buffer, 0, sizeof(StaticRingbuffer_t));
+
+    buffer->staticAllocation.storage =
+        heap_caps_malloc(totalSize, MALLOC_CAP_32BIT);
+    if (buffer->staticAllocation.storage == NULL)
+        return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+
+    ESP_LOGD(TAG, "Alignment of StaticRingbuffer_t: %zu",
+             __alignof__(buffer->staticAllocation.buffer));
+    ESP_LOGD(TAG, "Alignment of buffer static storage: %zu",
+             __alignof__(buffer->staticAllocation.storage));
+
+    buffer->buffer = xRingbufferCreateStatic(totalSize, RINGBUF_TYPE_NOSPLIT,
+                                               buffer->staticAllocation.storage,
+                                               buffer->staticAllocation.buffer);
+    if (buffer->buffer == NULL) return ESP_FAIL;
+
+    buffer->vectorMaxNumber = maxItemNumber;
+    /* Save the padded size for internal operations */
+    buffer->vectorSize = paddedItemSize;
+
+    buffer->mutex = xSemaphoreCreateMutex();
+    configASSERT(buffer->mutex);
+
+    /* 
+     * Prime the ring buffer with a dummy push/pop so that its internal
+     * state is fully initialized.
+     */
+    {
+        uint8_t dummy[paddedItemSize];
+        memset(dummy, 0, paddedItemSize);
+        if (xRingbufferSend(buffer->buffer, dummy, paddedItemSize, 10) != pdTRUE) {
+            ESP_LOGW(TAG, "Dummy push failed");
+        } else {
+            size_t dummySize = 0;
+            void *dummyPtr = xRingbufferReceive(buffer->buffer, &dummySize, 10);
+            if (dummyPtr != NULL) {
+                vRingbufferReturnItem(buffer->buffer, dummyPtr);
+            }
+        }
+    }
+
+    /* Now that the ring buffer is primed, get and log its info */
+    UBaseType_t freePtr, readPtr, writePtr, acquirePtr, itemsQueue;
+    vRingbufferGetInfo(buffer->buffer, &freePtr, &readPtr, &writePtr, &acquirePtr,
+                         &itemsQueue);
+
+    ESP_LOGI(TAG, "Buffer info. Buffer ptr: %p", (void *)buffer);
+    ESP_LOGI(TAG, "Buffer info. Ringbuffer ptr: %p", (void *)buffer->buffer);
+    ESP_LOGI(TAG, "Ringbuffer Free Ptr: %u", freePtr);
+    ESP_LOGI(TAG, "Ringbuffer Read Ptr: %u", readPtr);
+    ESP_LOGI(TAG, "Ringbuffer Write Ptr: %u", writePtr);
+    ESP_LOGI(TAG, "Ringbuffer Acquire Ptr: %u", acquirePtr);
+    ESP_LOGI(TAG, "Ringbuffer Items Queue: %u", itemsQueue);
+
+    return ESP_OK;
+}
+
+
+esp_err_t deinitBuffer(vectorBuffer_t *buffer) {
+  if (buffer == NULL) return ESP_FAIL;
+  vRingbufferDelete(buffer->buffer);
+  free(buffer->staticAllocation.buffer);
+  free(buffer->staticAllocation.storage);
+  vSemaphoreDelete(buffer->mutex);
+  return ESP_OK;
+}
+
+esp_err_t pushItem(vectorBuffer_t *buffer, void *item, size_t itemLogicalSize) {
+  configASSERT(item);
+  configASSERT(buffer);
+  configASSERT(buffer->buffer);
+
+  if (xSemaphoreTake(buffer->mutex, 5) == pdTRUE) {
+    /* Create a temporary buffer with padded size */
+    size_t paddedSize = buffer->vectorSize;
+    uint8_t temp[paddedSize];
+    memset(temp, 0, paddedSize);          // Zero out the temporary buffer
+    memcpy(temp, item, itemLogicalSize);  // Copy only the logical bytes
+
+    /* Get internal ring buffer info */
+    UBaseType_t freePtr, readPtr, writePtr, acquirePtr, itemsQueue;
+    vRingbufferGetInfo(buffer->buffer, &freePtr, &readPtr, &writePtr,
+                       &acquirePtr, &itemsQueue);
+
+    /* Log buffer pointers */
+    ESP_LOGI(TAG, "Buffer info. Buffer ptr: %p", (void *)buffer);
+    ESP_LOGI(TAG, "Buffer info. Ringbuffer ptr: %p", (void *)buffer->buffer);
+    ESP_LOGI(TAG, "Buffer info. Padded vector size: %u", paddedSize);
+    ESP_LOGI(TAG, "Ringbuffer Free Ptr: %u", freePtr);
+    ESP_LOGI(TAG, "Ringbuffer Read Ptr: %u", readPtr);
+    ESP_LOGI(TAG, "Ringbuffer Write Ptr: %u", writePtr);
+    ESP_LOGI(TAG, "Ringbuffer Acquire Ptr: %u", acquirePtr);
+    ESP_LOGI(TAG, "Ringbuffer Items Queue: %u", itemsQueue);
+    ESP_LOG_BUFFER_HEX_LEVEL(TAG, temp, paddedSize, ESP_LOG_INFO);
+
+    if (xRingbufferSend(buffer->buffer, temp, paddedSize, 10) == pdFALSE) {
+      xSemaphoreGive(buffer->mutex);
+      return ESP_FAIL;
+    }
+    xSemaphoreGive(buffer->mutex);
+    return ESP_OK;
+  }
+  return ESP_FAIL;
+}
+
+esp_err_t pullItem(vectorBuffer_t *buffer, void *item, size_t itemLogicalSize) {
+  configASSERT(item);
+  configASSERT(buffer);
+  configASSERT(buffer->buffer);
+
+  size_t receivedSize;
+  if (xSemaphoreTake(buffer->mutex, 5) == pdTRUE) {
+    void *itemCopy = xRingbufferReceive(buffer->buffer, &receivedSize, 1);
+    if (itemCopy == NULL) {
+      xSemaphoreGive(buffer->mutex);
+      return ESP_ERR_TIMEOUT;
+    }
+    if (receivedSize != buffer->vectorSize) {
+      /* Return the item before erroring out */
+      vRingbufferReturnItem(buffer->buffer, itemCopy);
+      xSemaphoreGive(buffer->mutex);
+      return ESP_ERR_INVALID_RESPONSE;
+    }
+    /* Copy only the logical size (e.g., 10 bytes) to the caller's buffer */
+    memcpy(item, itemCopy, itemLogicalSize);
+    vRingbufferReturnItem(buffer->buffer, itemCopy);
+    xSemaphoreGive(buffer->mutex);
+    return ESP_OK;
+  }
+  return ESP_FAIL;
+}
