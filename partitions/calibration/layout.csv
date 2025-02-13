@@ -1,0 +1,4 @@
+Var,Size,type,bytes
+A_mag_cal,3x3,float,36
+b_mag_cal,1x3,float,12
+total,,,48

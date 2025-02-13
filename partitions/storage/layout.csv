@@ -1,0 +1,8 @@
+Var,Size,type,bytes
+mag_data_lenght,1,uint32_t,4
+mag_data,3x1000,float,12000
+acc_data_lenght,1,uint32_t,4
+acc_data,3x1000,float,12000
+gyro_data_lenght,1,uint32_t,4
+gyro_data,3x1000,float,12000
+total,,,384
