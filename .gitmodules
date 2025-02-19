@@ -1,0 +1,7 @@
+[submodule "components/EKF_C"]
+	path = components/EKF_C
+	url = https://github.com/DavidMoranUCLM/EKF_C
+	branch = idf
+[submodule "esp-idf-lib"]
+	path = esp-idf-lib
+	url = https://github.com/DavidMoranUCLM/esp-idf-lib

@@ -3,7 +3,7 @@ idf_component_register(SRCS "main.c"
                     REQUIRES gsl 
                              buffer 
                              logging
-                             INS_C
+                             EKF_C
                              mpu9250
                              esp_partition
                              esp_timer)
