@@ -6,5 +6,6 @@ idf_component_register(SRCS "main.c"
                              EKF_C
                              mpu9250
                              esp_partition
-                             esp_timer)
+                             esp_timer
+                             partitionLog)
                              
