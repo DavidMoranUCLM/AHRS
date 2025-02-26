@@ -1,5 +1,5 @@
 #ifndef PARTITION_LOG_H
-#define PARITITON_LOG_H
+#define PARTITION_LOG_H
 
 #include "esp_partition.h"
 
@@ -21,6 +21,22 @@ typedef enum {
   LOG_QUAT_X,
   LOG_QUAT_Y,
   LOG_QUAT_Z,
+  // New q_est values:
+  LOG_QEST_W,
+  LOG_QEST_X,
+  LOG_QEST_Y,
+  LOG_QEST_Z,
+  // New ekf->h values:
+  LOG_V0,
+  LOG_V1,
+  LOG_V2,
+  LOG_V3,
+  LOG_V4,
+  LOG_V5,
+  LOG_P11, LOG_P12, LOG_P13, LOG_P14,
+  LOG_P21, LOG_P22, LOG_P23, LOG_P24,
+  LOG_P31, LOG_P32, LOG_P33, LOG_P34,
+  LOG_P41, LOG_P42, LOG_P43, LOG_P44,
   LOG_MAX_ELEM,
 } dataLayout_t;
 
@@ -33,14 +49,24 @@ typedef struct __attribute__((__packed__)) {
   float gyro[3];
   float mag[3];
   float quat[4];
+  float q_est[4];  // <-- Added EKF q_est values
+  float v[6];      // EKF h values (renamed from h)
+  float P[4][4];
 } logData_t;
+
+
+typedef struct __attribute__((__packed__)) {
+  uint32_t nData;
+  char varNames[LOG_MAX_ELEM][10];
+} logHeader_t;
+
 
 /**
  * @brief Struct for log partition.
  */
 typedef struct {
   esp_partition_t *partition;
-  uint32_t nData;
+  logHeader_t header;
   uint32_t head;
   uint32_t headerSize;
   logData_t data;

@@ -26,8 +26,10 @@
 #define I2C_SDA 33
 #define I2C_SCL 32
 
-#define MEASURES_BUFFER_ITEM_NUMBER 100
-#define LOG_BUFFER_ITEM_NUMBER 100
+#define MEASURES_BUFFER_ITEM_NUMBER 200
+#define LOG_BUFFER_ITEM_NUMBER 200
+
+#define LOG_ITEM_PERIOD_MS 100
 
 #define US_TO_S ((float)(1.f / 1000000.f));
 
@@ -135,8 +137,7 @@ void lockUntilPress(void) {
 }
 
 esp_err_t app_init(mpu9250_dev_t *dev, EKF_ctx_t *ekf,
-                   vectorBuffer_t *measuresBuffer,
-                   vectorBuffer_t *logBuffer) {
+                   vectorBuffer_t *measuresBuffer, vectorBuffer_t *logBuffer) {
   const char *TAG = "APP_INIT";
   esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
@@ -178,8 +179,7 @@ esp_err_t app_init(mpu9250_dev_t *dev, EKF_ctx_t *ekf,
   CHECK(initBuffer(measuresBuffer, sizeof(measureItem_t),
                    MEASURES_BUFFER_ITEM_NUMBER));
   ESP_LOGI(TAG, "Measurements buffer init success");
-  CHECK(initBuffer(logBuffer, sizeof(logData_t),
-                   LOG_BUFFER_ITEM_NUMBER));
+  CHECK(initBuffer(logBuffer, sizeof(logData_t), LOG_BUFFER_ITEM_NUMBER));
   ESP_LOGI(TAG, "Log buffer init success");
 
   measures_t initMeasures;
@@ -235,7 +235,8 @@ void measurementsProducer(void *param) {
 
   measurementsProducerCfg_t *conf = param;
 
-  TickType_t prevTick = 0, prevPrevTick = 0;
+  TickType_t prevTick = xTaskGetTickCount();
+  TickType_t prevPrevTick = prevTick;
   measureItem_t item;
 
   esp_err_t err;
@@ -274,7 +275,8 @@ void measurementsProcesor(void *param) {
 
   measurementsProcesorCfg_t *conf = param;
 
-  TickType_t prevTick = 0, prevPrevTick = 0;
+  TickType_t prevTick = xTaskGetTickCount();
+  TickType_t prevPrevTick = prevTick;
   measureItem_t measureItem;
   measures_t ekfMeasures;
   float mag_norm = 0;
@@ -293,9 +295,9 @@ void measurementsProcesor(void *param) {
         continue;
       }
 
-      ekfMeasures.acc[0] = measureItem.acc.x;
-      ekfMeasures.acc[1] = measureItem.acc.y;
-      ekfMeasures.acc[2] = measureItem.acc.z;
+      ekfMeasures.acc[0] = measureItem.acc.x - 0.57;
+      ekfMeasures.acc[1] = measureItem.acc.y - 0.9;
+      ekfMeasures.acc[2] = measureItem.acc.z + 1.8;
 
       ekfMeasures.mag[0] = measureItem.mag.x;
       ekfMeasures.mag[1] = measureItem.mag.y;
@@ -307,51 +309,76 @@ void measurementsProcesor(void *param) {
 
       ekfStep(conf->ekf, &ekfMeasures, measureItem.measureTime);
 
-      logItem.timestamp = measureItem.measureTime;
+      if ((uint64_t)(measureItem.measureTime * 1000) % LOG_ITEM_PERIOD_MS <
+          conf->taskPeriod) {
+        logItem.timestamp = measureItem.measureTime;
 
-      logItem.quat[0] = gsl_quat_float_get(conf->ekf->q_current, 0);
-      logItem.quat[1] = gsl_quat_float_get(conf->ekf->q_current, 1);
-      logItem.quat[2] = gsl_quat_float_get(conf->ekf->q_current, 2);
-      logItem.quat[3] = gsl_quat_float_get(conf->ekf->q_current, 3);
-      logItem.acc[0] = measureItem.acc.x;
-      logItem.acc[1] = measureItem.acc.y;
-      logItem.acc[2] = measureItem.acc.z;
-      logItem.gyro[0] = ekfMeasures.velAng[0];
-      logItem.gyro[1] = ekfMeasures.velAng[1];
-      logItem.gyro[2] = ekfMeasures.velAng[2];
-      logItem.mag[0] = measureItem.mag.x;
-      logItem.mag[1] = measureItem.mag.y;
-      logItem.mag[2] = measureItem.mag.z;
+        logItem.quat[0] = gsl_quat_float_get(conf->ekf->q_current, 0);
+        logItem.quat[1] = gsl_quat_float_get(conf->ekf->q_current, 1);
+        logItem.quat[2] = gsl_quat_float_get(conf->ekf->q_current, 2);
+        logItem.quat[3] = gsl_quat_float_get(conf->ekf->q_current, 3);
+        logItem.acc[0] = ekfMeasures.acc[0];
+        logItem.acc[1] = ekfMeasures.acc[1];
+        logItem.acc[2] = ekfMeasures.acc[2];
+        logItem.gyro[0] = ekfMeasures.velAng[0];
+        logItem.gyro[1] = ekfMeasures.velAng[1];
+        logItem.gyro[2] = ekfMeasures.velAng[2];
+        logItem.mag[0] = measureItem.mag.x;
+        logItem.mag[1] = measureItem.mag.y;
+        logItem.mag[2] = measureItem.mag.z;
 
-      // Log accelerometer values
-      ESP_LOGD(TAG, "Accelerometer values: X: %.2f, Y: %.2f, Z: %.2f",
-               measureItem.acc.x, measureItem.acc.y, measureItem.acc.z);
-
-      // Log magnetometer values
-      ESP_LOGD(TAG, "Magnetometer values: X: %.2f, Y: %.2f, Z: %.2f",
-               ekfMeasures.mag[0], ekfMeasures.mag[1], ekfMeasures.mag[2]);
-
-      // Log angular velocity values
-      ESP_LOGD(TAG, "Angular velocity values: X: %.2f, Y: %.2f, Z: %.2f",
-               ekfMeasures.velAng[0], ekfMeasures.velAng[1],
-               ekfMeasures.velAng[2]);
-      ESP_LOGD(TAG, "t=%.4f, q0=%.2f, qx=%.2f, qy=%.2f, qz=%.2f",
-               logItem.timestamp, logItem.quat[0], logItem.quat[1],
-               logItem.quat[2], logItem.quat[3]);
-      do {
-        err = pushItem(conf->logBuffer, &logItem, sizeof(logItem));
-        if (err != ESP_OK) {
-          ESP_LOGW(TAG, "Buffer results push exception: %s",
-                   esp_err_to_name(err));
-          vTaskDelay(1);
+        for (uint8_t i = 0; i < conf->ekf->P_current->size1; i++) {
+          for (uint8_t j = 0; j < conf->ekf->P_current->size2; j++) {
+            logItem.P[i][j] = gsl_matrix_float_get(conf->ekf->P_current, i, j);
+          }
         }
-      } while (err != ESP_OK);
+
+        float acc_norm = sqrtf(logItem.acc[0] * logItem.acc[0] +
+                               logItem.acc[1] * logItem.acc[1] +
+                               logItem.acc[2] * logItem.acc[2]);
+        float mag_norm = sqrtf(logItem.mag[0] * logItem.mag[0] +
+                               logItem.mag[1] * logItem.mag[1] +
+                               logItem.mag[2] * logItem.mag[2]);
+        logItem.v[0] = gsl_vector_float_get(conf->ekf->wk->h, 0) -
+                       logItem.acc[0] / acc_norm;
+        logItem.v[1] = gsl_vector_float_get(conf->ekf->wk->h, 1) -
+                       logItem.acc[1] / acc_norm;
+        logItem.v[2] = gsl_vector_float_get(conf->ekf->wk->h, 2) -
+                       logItem.acc[2] / acc_norm;
+        logItem.v[3] = gsl_vector_float_get(conf->ekf->wk->h, 3) -
+                       logItem.mag[0] / mag_norm;
+        logItem.v[4] = gsl_vector_float_get(conf->ekf->wk->h, 4) -
+                       logItem.mag[1] / mag_norm;
+        logItem.v[5] = gsl_vector_float_get(conf->ekf->wk->h, 5) -
+                       logItem.mag[2] / mag_norm;
+
+        // Log accelerometer values
+        ESP_LOGD(TAG, "Accelerometer values: X: %.2f, Y: %.2f, Z: %.2f",
+                 ekfMeasures.mag[0], ekfMeasures.mag[1], ekfMeasures.mag[2]);
+
+        // Log angular velocity values
+        ESP_LOGD(TAG, "Angular velocity values: X: %.2f, Y: %.2f, Z: %.2f",
+                 ekfMeasures.velAng[0], ekfMeasures.velAng[1],
+                 ekfMeasures.velAng[2]);
+        ESP_LOGD(TAG, "t=%.4f, q0=%.2f, qx=%.2f, qy=%.2f, qz=%.2f",
+                 logItem.timestamp, logItem.quat[0], logItem.quat[1],
+                 logItem.quat[2], logItem.quat[3]);
+
+        do {
+          err = pushItem(conf->logBuffer, &logItem, sizeof(logItem));
+          if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Buffer results push exception: %s",
+                     esp_err_to_name(err));
+            vTaskDelay(1);
+          }
+        } while (err != ESP_OK);
+      }
 
     } while (err != ESP_ERR_TIMEOUT);
 
     if (xTaskDelayUntil(&prevTick, conf->taskPeriod) == pdFALSE) {
-      // ESP_LOGW(TAG, "Missed %ld ticks",
-      //          (prevTick - prevPrevTick) - conf->taskPeriod);
+      ESP_LOGW(TAG, "Missed %ld ticks",
+               (prevTick - prevPrevTick) - conf->taskPeriod);
     }
   }
 }
@@ -363,7 +390,8 @@ void logger(void *param) {
 
   loggerCfg_t *conf = param;
 
-  TickType_t prevTick = 0, prevPrevTick = 0;
+  TickType_t prevTick = xTaskGetTickCount();
+  TickType_t prevPrevTick = prevTick;
   logData_t logItem;
   esp_err_t err;
 
@@ -392,6 +420,16 @@ void logger(void *param) {
       conf->logPartition->data.mag[0] = logItem.mag[0];
       conf->logPartition->data.mag[1] = logItem.mag[1];
       conf->logPartition->data.mag[2] = logItem.mag[2];
+      for (uint8_t i = 0; i < 3; i++) {
+        for (uint8_t j = 0; j < 3; j++) {
+          conf->logPartition->data.P[i][j] = logItem.P[i][j];
+        }
+      }
+
+      // NEW: Copy logItem.h values into the partition data header
+      for (uint8_t i = 0; i < 6; i++) {
+        conf->logPartition->data.v[i] = logItem.v[i];
+      }
 
       do {
         err = logPartitionUpdate(conf->logPartition);
@@ -405,13 +443,13 @@ void logger(void *param) {
     } while (1);
 
     logPartitionUpdateHeader(conf->logPartition);
-    ESP_LOGI(TAG,"Current Quat at time %.4f: %.4f, %.4f, %.4f, %.4f",
-             logItem.timestamp, logItem.quat[0], logItem.quat[1], logItem.quat[2],
-             logItem.quat[3]);
-
+    ESP_LOGI(TAG, "Current Quat at time %.4f: %.4f, %.4f, %.4f, %.4f",
+             logItem.timestamp, logItem.quat[0], logItem.quat[1],
+             logItem.quat[2], logItem.quat[3]);
+    ESP_LOGI(TAG, "Free heap size: %lu B", esp_get_free_heap_size());
     if (xTaskDelayUntil(&prevTick, conf->taskPeriod) == pdFALSE) {
-      // ESP_LOGW(TAG, "Missed %ld ticks",
-      //          (prevTick - prevPrevTick) - conf->taskPeriod);
+       ESP_LOGW(TAG, "Missed %ld ticks",
+               (prevTick - prevPrevTick) - conf->taskPeriod);
     }
   }
 }
@@ -436,20 +474,21 @@ void app_main(void) {
 
   configASSERT(loggerCfg.logPartition);
   TaskHandle_t *loggerTaskHandle;
-  xTaskCreatePinnedToCore(logger, "Logger", configMINIMAL_STACK_SIZE * 10, &loggerCfg,
-              tskIDLE_PRIORITY, &loggerTaskHandle, 0);
+  xTaskCreatePinnedToCore(logger, "Logger", configMINIMAL_STACK_SIZE * 10,
+                          &loggerCfg, tskIDLE_PRIORITY, &loggerTaskHandle, 0);
   configASSERT(loggerTaskHandle);
   vTaskSuspend(loggerTaskHandle);
 
   measurementsProducerCfg_t producerCfg = {
       .buffer = &measuresBuffer,
       .mpu9250 = &dev,
-      .taskPeriod = pdMS_TO_TICKS(100),
+      .taskPeriod = pdMS_TO_TICKS(50),
   };
 
   TaskHandle_t *producerTaskHandle;
-  xTaskCreatePinnedToCore(measurementsProducer, "Producer", configMINIMAL_STACK_SIZE * 10,
-              &producerCfg, tskIDLE_PRIORITY, &producerTaskHandle, 0);
+  xTaskCreatePinnedToCore(measurementsProducer, "Producer",
+                          configMINIMAL_STACK_SIZE * 10, &producerCfg,
+                          0, &producerTaskHandle, 0);
   configASSERT(producerTaskHandle);
   vTaskSuspend(producerTaskHandle);
 
@@ -462,8 +501,9 @@ void app_main(void) {
   };
 
   TaskHandle_t *procesorTaskHandle;
-  xTaskCreatePinnedToCore(measurementsProcesor, "Procesor", configMINIMAL_STACK_SIZE * 10,
-              &procesorCfg, tskIDLE_PRIORITY, &procesorTaskHandle, 1);
+  xTaskCreatePinnedToCore(measurementsProcesor, "Procesor",
+                          configMINIMAL_STACK_SIZE * 10, &procesorCfg,
+                          tskIDLE_PRIORITY, &procesorTaskHandle, 1);
   configASSERT(procesorTaskHandle);
   vTaskSuspend(procesorTaskHandle);
 

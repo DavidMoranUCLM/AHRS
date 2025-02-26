@@ -11,11 +11,38 @@
 #define LOG_PARTITION_TAG "LOG_PARTITION"
 #define LOG_PARTITION_NAME "storage"
 
+// Updated static array with variable names based on the enum order in partitionLog.h
+static const char *varNames[LOG_MAX_ELEM] = {
+  "time_s",
+  "acc_x",
+  "acc_y",
+  "acc_z",
+  "gyro_x",
+  "gyro_y",
+  "gyro_z",
+  "mag_x",
+  "mag_y",
+  "mag_z",
+  "quat_w",
+  "quat_x",
+  "quat_y",
+  "quat_z",
+  "q_est_w",
+  "q_est_x",
+  "q_est_y",
+  "q_est_z",
+  "v0", "v1", "v2", "v3", "v4", "v5",  // New ekf->h names
+  "P11", "P12", "P13", "P14",
+  "P21", "P22", "P23", "P24",
+  "P31", "P32", "P33", "P34",
+  "P41", "P42", "P43", "P44"
+};
+
 static size_t getHeaderSize(const logPartition_t *logPartition) {
-  if (logPartition->partition->erase_size > sizeof(logPartition->nData)) {
+  if (logPartition->partition->erase_size > sizeof(logPartition->header)) {
     return logPartition->partition->erase_size;
   } else {
-    float size = (float)sizeof(logPartition->nData) /
+    float size = (float)sizeof(logPartition->header) /
                  (float)logPartition->partition->erase_size;
     return ceil(size) * logPartition->partition->erase_size;
   }
@@ -33,7 +60,7 @@ static size_t getHeaderSize(const logPartition_t *logPartition) {
  */
 logPartition_t *logPartitionNew(void) {
   esp_err_t err;
-  logPartition_t *logPartition = malloc(sizeof(logPartition_t));
+  logPartition_t *logPartition = calloc(1,sizeof(logPartition_t));
   if (logPartition == NULL) {
     ESP_LOGE(LOG_PARTITION_TAG, "Error allocating memory");
     return NULL;
@@ -47,7 +74,14 @@ logPartition_t *logPartitionNew(void) {
   ESP_LOGI(LOG_PARTITION_TAG, "Partition found");
 
   logPartition->headerSize = getHeaderSize(logPartition);
-  logPartition->nData = 0;
+  
+  logPartition->header.nData = 0;
+  // Copy each variable name into header.varNames
+  for (int i = 0; i < LOG_MAX_ELEM; i++) {
+    strncpy(logPartition->header.varNames[i], varNames[i], sizeof(logPartition->header.varNames[i]) - 1);
+    logPartition->header.varNames[i][sizeof(logPartition->header.varNames[i]) - 1] = '\0';
+  }
+
   logPartition->head = logPartition->headerSize;
   // Use partition->erase_size logic to compute total erase size:
   uint32_t totalBlocks =
@@ -62,8 +96,8 @@ logPartition_t *logPartitionNew(void) {
     free(logPartition);
     return NULL;
   }
-  err = esp_partition_write(logPartition->partition, 0, &logPartition->nData,
-                            sizeof(logPartition->nData));
+  err = esp_partition_write(logPartition->partition, 0, &logPartition->header,
+                            sizeof(logPartition->header));
   if (err != ESP_OK) {
     ESP_LOGE(LOG_PARTITION_TAG, "Error writing to partition: %s",
              esp_err_to_name(err));
@@ -97,7 +131,7 @@ esp_err_t logPartitionUpdate(logPartition_t *logPartition) {
   }
   ESP_LOGD(LOG_PARTITION_TAG, "Data written to partition");
   logPartition->head += sizeof(logPartition->data);
-  logPartition->nData++;
+  logPartition->header.nData++;
   return ESP_OK;
 }
 
@@ -110,8 +144,8 @@ esp_err_t logPartitionUpdateHeader(logPartition_t *logPartition) {
              esp_err_to_name(ret));
     return ret;
   }
-  ret = esp_partition_write(logPartition->partition, 0, &logPartition->nData,
-                            sizeof(logPartition->nData));
+  ret = esp_partition_write(logPartition->partition, 0, &logPartition->header,
+                            sizeof(logPartition->header));
   if (ret != ESP_OK) {
     ESP_LOGE(LOG_PARTITION_TAG, "Error writing header to partition: %s",
              esp_err_to_name(ret));

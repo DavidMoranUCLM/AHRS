@@ -1,8 +1,1 @@
-Var,Size,type,bytes
-mag_data_lenght,1,uint32_t,4
-mag_data,3x1000,float,12000
-acc_data_lenght,1,uint32_t,4
-acc_data,3x1000,float,12000
-gyro_data_lenght,1,uint32_t,4
-gyro_data,3x1000,float,12000
-total,,,384
+timestamp, acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z, mag_x, mag_y, mag_z, quat_w, quat_x, quat_y, quat_z, P11, P12, P13, P14, P21, P22, P23, P24, P31, P32, P33, P34, P41, P42, P43, P44
