@@ -97,7 +97,7 @@ esp_err_t pushItem(vectorBuffer_t *buffer, void *item, size_t itemLogicalSize) {
         xSemaphoreGive(buffer->mutex);
         return ESP_OK;
     }
-    return ESP_FAIL;
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t pullItem(vectorBuffer_t *buffer, void *item, size_t itemLogicalSize) {

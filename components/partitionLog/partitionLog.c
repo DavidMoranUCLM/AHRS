@@ -11,32 +11,25 @@
 #define LOG_PARTITION_TAG "LOG_PARTITION"
 #define LOG_PARTITION_NAME "storage"
 
-// Updated static array with variable names based on the enum order in partitionLog.h
+// Updated static array with variable names based on the enum order in
+// partitionLog.h
 static const char *varNames[LOG_MAX_ELEM] = {
-  "time_s",
-  "acc_x",
-  "acc_y",
-  "acc_z",
-  "gyro_x",
-  "gyro_y",
-  "gyro_z",
-  "mag_x",
-  "mag_y",
-  "mag_z",
-  "quat_w",
-  "quat_x",
-  "quat_y",
-  "quat_z",
-  "q_est_w",
-  "q_est_x",
-  "q_est_y",
-  "q_est_z",
-  "v0", "v1", "v2", "v3", "v4", "v5",  // New ekf->h names
-  "P11", "P12", "P13", "P14",
-  "P21", "P22", "P23", "P24",
-  "P31", "P32", "P33", "P34",
-  "P41", "P42", "P43", "P44"
-};
+    "time_s", "acc_x", "acc_y", "acc_z", "gyro_x", "gyro_y", "gyro_z", "mag_x",
+    "mag_y", "mag_z", "quat_w", "quat_x", "quat_y", "quat_z", "q_est_w",
+    "q_est_x", "q_est_y", "q_est_z", "v0", "v1", "v2", "v3", "v4", "v5",
+    // // New K matrix values (4x6)
+    // "K11", "K12", "K13", "K14", "K15", "K16",
+    // "K21", "K22", "K23", "K24", "K25", "K26",
+    // "K31", "K32", "K33", "K34", "K35", "K36",
+    // "K41", "K42", "K43", "K44", "K45", "K46",
+    // // New S matrix values (6x6)
+    "S11", "S12", "S13", "S14", "S15", "S16", "S21", "S22", "S23", "S24", "S25",
+    "S26", "S31", "S32", "S33", "S34", "S35", "S36", "S41", "S42", "S43", "S44",
+    "S45", "S46", "S51", "S52", "S53", "S54", "S55", "S56", "S61", "S62", "S63",
+    "S64", "S65", "S66", "P11", "P12", "P13", "P14", "P21", "P22", "P23", "P24",
+    "P31", "P32", "P33", "P34", "P41", "P42", "P43", "P44", "H11", "H12", "H13",
+    "H14", "H21", "H22", "H23", "H24", "H31", "H32", "H33", "H34", "H41", "H42",
+    "H43", "H44", "H51", "H52", "H53", "H54", "H61", "H62", "H63", "H64"};
 
 static size_t getHeaderSize(const logPartition_t *logPartition) {
   if (logPartition->partition->erase_size > sizeof(logPartition->header)) {
@@ -60,7 +53,7 @@ static size_t getHeaderSize(const logPartition_t *logPartition) {
  */
 logPartition_t *logPartitionNew(void) {
   esp_err_t err;
-  logPartition_t *logPartition = calloc(1,sizeof(logPartition_t));
+  logPartition_t *logPartition = calloc(1, sizeof(logPartition_t));
   if (logPartition == NULL) {
     ESP_LOGE(LOG_PARTITION_TAG, "Error allocating memory");
     return NULL;
@@ -74,12 +67,14 @@ logPartition_t *logPartitionNew(void) {
   ESP_LOGI(LOG_PARTITION_TAG, "Partition found");
 
   logPartition->headerSize = getHeaderSize(logPartition);
-  
+
   logPartition->header.nData = 0;
   // Copy each variable name into header.varNames
   for (int i = 0; i < LOG_MAX_ELEM; i++) {
-    strncpy(logPartition->header.varNames[i], varNames[i], sizeof(logPartition->header.varNames[i]) - 1);
-    logPartition->header.varNames[i][sizeof(logPartition->header.varNames[i]) - 1] = '\0';
+    strncpy(logPartition->header.varNames[i], varNames[i],
+            sizeof(logPartition->header.varNames[i]) - 1);
+    logPartition->header
+        .varNames[i][sizeof(logPartition->header.varNames[i]) - 1] = '\0';
   }
 
   logPartition->head = logPartition->headerSize;
