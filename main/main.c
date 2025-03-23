@@ -175,11 +175,11 @@ esp_err_t app_init(mpu9250_dev_t *dev, EKF_ctx_t *ekf,
 
   *measuresQueue =
       xQueueCreate(MEASURES_BUFFER_ITEM_NUMBER, sizeof(measureItem_t));
-  CHECK(*measuresQueue);
+  configASSERT(*measuresQueue);
   ESP_LOGI(TAG, "Measurements queue init success");
 
   *logQueue = xQueueCreate(LOG_BUFFER_ITEM_NUMBER, sizeof(logData_t));
-  CHECK(*logQueue);
+  configASSERT(*logQueue);
   ESP_LOGI(TAG, "Log queue init success");
 
   measures_t initMeasures;
@@ -257,7 +257,7 @@ void measurementsProducer(void *param) {
       }
     } while (err != ESP_OK);
 
-    if (xQueueSend(*conf->queue, &item, portMAX_DELAY) != pdTRUE) {
+    if (xQueueSendToBack(conf->queue, &item, 0) != pdTRUE) {
       ESP_LOGW(TAG, "Buffer push exception: %s", esp_err_to_name(err));
       vTaskDelay(1);
     }
@@ -281,111 +281,111 @@ void measurementsProcesor(void *param) {
   float mag[3] = {0};
   logData_t logItem = {0};
   esp_err_t err;
+  float prevMeasureLogTime = 0;
 
   while (1) {
     prevPrevTick = prevTick;
 
-    if (xQueueReceive(*conf->measuresQueue, &measureItem, portMAX_DELAY) !=
-        pdTRUE) {
-      ESP_LOGW(TAG, "Buffer measures pull exception");
-      vTaskDelay(1);
-      continue;
-    }
+    while (xQueueReceive(conf->measuresQueue, &measureItem, 0) == pdTRUE) {
+      ekfMeasures.acc[0] = measureItem.acc.x - 0.57;
+      ekfMeasures.acc[1] = measureItem.acc.y + 0.9;
+      ekfMeasures.acc[2] = measureItem.acc.z + 1.8;
 
-    ekfMeasures.acc[0] = measureItem.acc.x - 0.57;
-    ekfMeasures.acc[1] = measureItem.acc.y + 0.9;
-    ekfMeasures.acc[2] = measureItem.acc.z + 1.8;
+      ekfMeasures.mag[0] = measureItem.mag.x;
+      ekfMeasures.mag[1] = measureItem.mag.y;
+      ekfMeasures.mag[2] = measureItem.mag.z;
 
-    ekfMeasures.mag[0] = measureItem.mag.x;
-    ekfMeasures.mag[1] = measureItem.mag.y;
-    ekfMeasures.mag[2] = measureItem.mag.z;
+      ekfMeasures.velAng[0] = measureItem.gyro.x + 0.045;
+      ekfMeasures.velAng[1] = measureItem.gyro.y + 0.038;
+      ekfMeasures.velAng[2] = measureItem.gyro.z - 0.045;
 
-    ekfMeasures.velAng[0] = measureItem.gyro.x + 0.045;
-    ekfMeasures.velAng[1] = measureItem.gyro.y + 0.038;
-    ekfMeasures.velAng[2] = measureItem.gyro.z - 0.045;
+      ekfStep(conf->ekf, &ekfMeasures, measureItem.measureTime);
 
-    ekfStep(conf->ekf, &ekfMeasures, measureItem.measureTime);
+      if ((measureItem.measureTime - prevMeasureLogTime) * 1000 >= LOG_ITEM_PERIOD_MS) {
+        prevMeasureLogTime = measureItem.measureTime;
 
-    if ((uint64_t)(measureItem.measureTime * 1000) % LOG_ITEM_PERIOD_MS <
-        pdTICKS_TO_MS(conf->taskPeriod)) {
-      logItem.timestamp = measureItem.measureTime;
+        logItem.timestamp = measureItem.measureTime;
 
-      logItem.quat[0] = gsl_quat_float_get(conf->ekf->q_current, 0);
-      logItem.quat[1] = gsl_quat_float_get(conf->ekf->q_current, 1);
-      logItem.quat[2] = gsl_quat_float_get(conf->ekf->q_current, 2);
-      logItem.quat[3] = gsl_quat_float_get(conf->ekf->q_current, 3);
+        logItem.quat[0] = gsl_quat_float_get(conf->ekf->q_current, 0);
+        logItem.quat[1] = gsl_quat_float_get(conf->ekf->q_current, 1);
+        logItem.quat[2] = gsl_quat_float_get(conf->ekf->q_current, 2);
+        logItem.quat[3] = gsl_quat_float_get(conf->ekf->q_current, 3);
 
-      logItem.q_est[0] = gsl_quat_float_get(conf->ekf->q_est, 0);
-      logItem.q_est[1] = gsl_quat_float_get(conf->ekf->q_est, 1);
-      logItem.q_est[2] = gsl_quat_float_get(conf->ekf->q_est, 2);
-      logItem.q_est[3] = gsl_quat_float_get(conf->ekf->q_est, 3);
+        logItem.q_est[0] = gsl_quat_float_get(conf->ekf->q_est, 0);
+        logItem.q_est[1] = gsl_quat_float_get(conf->ekf->q_est, 1);
+        logItem.q_est[2] = gsl_quat_float_get(conf->ekf->q_est, 2);
+        logItem.q_est[3] = gsl_quat_float_get(conf->ekf->q_est, 3);
 
-      logItem.acc[0] = ekfMeasures.acc[0];
-      logItem.acc[1] = ekfMeasures.acc[1];
-      logItem.acc[2] = ekfMeasures.acc[2];
-      logItem.gyro[0] = ekfMeasures.velAng[0];
-      logItem.gyro[1] = ekfMeasures.velAng[1];
-      logItem.gyro[2] = ekfMeasures.velAng[2];
-      logItem.mag[0] = measureItem.mag.x;
-      logItem.mag[1] = measureItem.mag.y;
-      logItem.mag[2] = measureItem.mag.z;
+        logItem.acc[0] = ekfMeasures.acc[0];
+        logItem.acc[1] = ekfMeasures.acc[1];
+        logItem.acc[2] = ekfMeasures.acc[2];
+        logItem.gyro[0] = ekfMeasures.velAng[0];
+        logItem.gyro[1] = ekfMeasures.velAng[1];
+        logItem.gyro[2] = ekfMeasures.velAng[2];
+        logItem.mag[0] = measureItem.mag.x;
+        logItem.mag[1] = measureItem.mag.y;
+        logItem.mag[2] = measureItem.mag.z;
 
-      // for (uint8_t i = 0; i < conf->ekf->P_current->size1; i++) {
-      //   for (uint8_t j = 0; j < conf->ekf->P_current->size2; j++) {
-      //     logItem.P[i][j] = gsl_matrix_float_get(conf->ekf->P_current, i,
-      //     j);
-      //   }
-      // }
+        // for (uint8_t i = 0; i < conf->ekf->P_current->size1; i++) {
+        //   for (uint8_t j = 0; j < conf->ekf->P_current->size2; j++) {
+        //     logItem.P[i][j] = gsl_matrix_float_get(conf->ekf->P_current, i,
+        //     j);
+        //   }
+        // }
 
-      // for (uint8_t i = 0; i < conf->ekf->wk->S->size1; i++) {
-      //   for (uint8_t j = 0; j < conf->ekf->wk->S->size2; j++) {
-      //     logItem.S[i][j] = gsl_matrix_float_get(conf->ekf->wk->S, i, j);
-      //   }
-      // }
-      // // New: Copy ekf->wk->H values into logItem.H (assumed dimensions
-      // 6x4) for (uint8_t i = 0; i < conf->ekf->wk->H->size1; i++) {
-      //   for (uint8_t j = 0; j < conf->ekf->wk->H->size2; j++) {
-      //     logItem.H[i][j] = gsl_matrix_float_get(conf->ekf->wk->H, i, j);
-      //   }
-      // }
+        // for (uint8_t i = 0; i < conf->ekf->wk->S->size1; i++) {
+        //   for (uint8_t j = 0; j < conf->ekf->wk->S->size2; j++) {
+        //     logItem.S[i][j] = gsl_matrix_float_get(conf->ekf->wk->S, i, j);
+        //   }
+        // }
+        // // New: Copy ekf->wk->H values into logItem.H (assumed dimensions
+        // 6x4) for (uint8_t i = 0; i < conf->ekf->wk->H->size1; i++) {
+        //   for (uint8_t j = 0; j < conf->ekf->wk->H->size2; j++) {
+        //     logItem.H[i][j] = gsl_matrix_float_get(conf->ekf->wk->H, i, j);
+        //   }
+        // }
 
-      float acc_norm = sqrtf(logItem.acc[0] * logItem.acc[0] +
-                             logItem.acc[1] * logItem.acc[1] +
-                             logItem.acc[2] * logItem.acc[2]);
-      float mag_norm = sqrtf(logItem.mag[0] * logItem.mag[0] +
-                             logItem.mag[1] * logItem.mag[1] +
-                             logItem.mag[2] * logItem.mag[2]);
-      // logItem.v[0] = gsl_vector_float_get(conf->ekf->wk->h, 0) -
-      //                logItem.acc[0] / acc_norm;
-      // logItem.v[1] = gsl_vector_float_get(conf->ekf->wk->h, 1) -
-      //                logItem.acc[1] / acc_norm;
-      // logItem.v[2] = gsl_vector_float_get(conf->ekf->wk->h, 2) -
-      //                logItem.acc[2] / acc_norm;
-      // logItem.v[3] = gsl_vector_float_get(conf->ekf->wk->h, 3) -
-      //                logItem.mag[0] / mag_norm;
-      // logItem.v[4] = gsl_vector_float_get(conf->ekf->wk->h, 4) -
-      //                logItem.mag[1] / mag_norm;
-      // logItem.v[5] = gsl_vector_float_get(conf->ekf->wk->h, 5) -
-      //                logItem.mag[2] / mag_norm;
-      logItem.v[0] = gsl_vector_float_get(conf->ekf->wk->h, 0);
-      logItem.v[1] = gsl_vector_float_get(conf->ekf->wk->h, 1);
-      logItem.v[2] = gsl_vector_float_get(conf->ekf->wk->h, 2);
+        float acc_norm = sqrtf(logItem.acc[0] * logItem.acc[0] +
+                               logItem.acc[1] * logItem.acc[1] +
+                               logItem.acc[2] * logItem.acc[2]);
+        float mag_norm = sqrtf(logItem.mag[0] * logItem.mag[0] +
+                               logItem.mag[1] * logItem.mag[1] +
+                               logItem.mag[2] * logItem.mag[2]);
+        // logItem.v[0] = gsl_vector_float_get(conf->ekf->wk->h, 0) -
+        //                logItem.acc[0] / acc_norm;
+        // logItem.v[1] = gsl_vector_float_get(conf->ekf->wk->h, 1) -
+        //                logItem.acc[1] / acc_norm;
+        // logItem.v[2] = gsl_vector_float_get(conf->ekf->wk->h, 2) -
+        //                logItem.acc[2] / acc_norm;
+        // logItem.v[3] = gsl_vector_float_get(conf->ekf->wk->h, 3) -
+        //                logItem.mag[0] / mag_norm;
+        // logItem.v[4] = gsl_vector_float_get(conf->ekf->wk->h, 4) -
+        //                logItem.mag[1] / mag_norm;
+        // logItem.v[5] = gsl_vector_float_get(conf->ekf->wk->h, 5) -
+        //                logItem.mag[2] / mag_norm;
+        logItem.v[0] = gsl_vector_float_get(conf->ekf->wk->h, 0);
+        logItem.v[1] = gsl_vector_float_get(conf->ekf->wk->h, 1);
+        logItem.v[2] = gsl_vector_float_get(conf->ekf->wk->h, 2);
 
-      // Log accelerometer values
-      ESP_LOGD(TAG, "Accelerometer values: X: %.2f, Y: %.2f, Z: %.2f",
-               logItem.mag[0], logItem.mag[1], logItem.mag[2]);
+        // Log accelerometer values
+        ESP_LOGD(TAG, "Accelerometer values: X: %.2f, Y: %.2f, Z: %.2f",
+                 logItem.mag[0], logItem.mag[1], logItem.mag[2]);
 
-      // Log angular velocity values
-      ESP_LOGD(TAG, "Angular velocity values: X: %.2f, Y: %.2f, Z: %.2f",
-               ekfMeasures.velAng[0], ekfMeasures.velAng[1],
-               ekfMeasures.velAng[2]);
-      ESP_LOGD(TAG, "t=%.4f, q0=%.2f, qx=%.2f, qy=%.2f, qz=%.2f",
-               logItem.timestamp, logItem.quat[0], logItem.quat[1],
-               logItem.quat[2], logItem.quat[3]);
+        // Log angular velocity values
+        ESP_LOGD(TAG, "Angular velocity values: X: %.2f, Y: %.2f, Z: %.2f",
+                 ekfMeasures.velAng[0], ekfMeasures.velAng[1],
+                 ekfMeasures.velAng[2]);
+        ESP_LOGD(TAG, "t=%.4f, q0=%.2f, qx=%.2f, qy=%.2f, qz=%.2f",
+                 logItem.timestamp, logItem.quat[0], logItem.quat[1],
+                 logItem.quat[2], logItem.quat[3]);
+        ESP_LOGD(TAG, "Queue usage: %u/%u",
+                 uxQueueMessagesWaiting(conf->measuresQueue),
+                 MEASURES_BUFFER_ITEM_NUMBER);
 
-      if (xQueueSend(*conf->logQueue, &logItem, portMAX_DELAY) != pdTRUE) {
-        ESP_LOGW(TAG, "Buffer results push exception");
-        vTaskDelay(1);
+        if (xQueueSendToBack(conf->logQueue, &logItem, 0) != pdTRUE) {
+          ESP_LOGW(TAG, "Buffer results push exception");
+          vTaskDelay(1);
+        }
       }
     }
 
@@ -411,12 +411,7 @@ void logger(void *param) {
   while (1) {
     prevPrevTick = prevTick;
 
-      if (xQueueSend(conf->logQueue, &logItem, portMAX_DELAY) != pdTRUE) {
-        ESP_LOGW(TAG, "Buffer pull exception");
-        vTaskDelay(1);
-        continue;
-      }
-
+    while (xQueueReceive(conf->logQueue, &logItem, 0) == pdTRUE) {
       conf->logPartition->data.timestamp = logItem.timestamp;
       conf->logPartition->data.quat[0] = logItem.quat[0];
       conf->logPartition->data.quat[1] = logItem.quat[1];
@@ -461,17 +456,18 @@ void logger(void *param) {
         }
       } while (err != ESP_OK);
 
-    logPartitionUpdateHeader(conf->logPartition);
-    ESP_LOGI(TAG, "Current Quat at time %.4f: %.4f, %.4f, %.4f, %.4f",
-             logItem.timestamp, logItem.quat[0], logItem.quat[1],
-             logItem.quat[2], logItem.quat[3]);
-    ESP_LOGD(TAG, "Accelerometer values: X: %.2f, Y: %.2f, Z: %.2f",
-             logItem.acc[0], logItem.acc[1], logItem.acc[2]);
-    ESP_LOGD(TAG, "Angular velocity values: X: %.2f, Y: %.2f, Z: %.2f",
-             logItem.gyro[0], logItem.gyro[1], logItem.gyro[2]);
-    ESP_LOGD(TAG, "Magnetometer values: X: %.2f, Y: %.2f, Z: %.2f",
-             logItem.mag[0], logItem.mag[1], logItem.mag[2]);
-    ESP_LOGD(TAG, "Free heap size: %lu B", esp_get_free_heap_size());
+      logPartitionUpdateHeader(conf->logPartition);
+      ESP_LOGI(TAG, "Current Quat at time %.4f: %.4f, %.4f, %.4f, %.4f",
+               logItem.timestamp, logItem.quat[0], logItem.quat[1],
+               logItem.quat[2], logItem.quat[3]);
+      ESP_LOGD(TAG, "Accelerometer values: X: %.2f, Y: %.2f, Z: %.2f",
+               logItem.acc[0], logItem.acc[1], logItem.acc[2]);
+      ESP_LOGD(TAG, "Angular velocity values: X: %.2f, Y: %.2f, Z: %.2f",
+               logItem.gyro[0], logItem.gyro[1], logItem.gyro[2]);
+      ESP_LOGD(TAG, "Magnetometer values: X: %.2f, Y: %.2f, Z: %.2f",
+               logItem.mag[0], logItem.mag[1], logItem.mag[2]);
+      ESP_LOGD(TAG, "Free heap size: %lu B", esp_get_free_heap_size());
+    }
 
     if (xTaskDelayUntil(&prevTick, conf->taskPeriod) == pdFALSE) {
       ESP_LOGW(TAG, "Missed %ld ticks",
@@ -495,7 +491,7 @@ void app_main(void) {
   ESP_ERROR_CHECK(app_init(&dev, &ekf, &measureQueue, &logQueue));
 
   loggerCfg_t loggerCfg = {
-      .logQueue = &logQueue,
+      .logQueue = logQueue,
       .logPartition = logPartitionNew(),
       .taskPeriod = pdMS_TO_TICKS(250),
   };
@@ -508,7 +504,7 @@ void app_main(void) {
   vTaskSuspend(loggerTaskHandle);
 
   measurementsProducerCfg_t producerCfg = {
-      .queue = &measureQueue,
+      .queue = measureQueue,
       .mpu9250 = &dev,
       .taskPeriod = pdMS_TO_TICKS(50),
   };
@@ -522,8 +518,8 @@ void app_main(void) {
 
   measurementsProcesorCfg_t procesorCfg = {
       .ekf = &ekf,
-      .measuresQueue = &measureQueue,
-      .logQueue = &logQueue,
+      .measuresQueue = measureQueue,
+      .logQueue = logQueue,
       .mpu9250 = &dev,
       .taskPeriod = pdMS_TO_TICKS(200),
   };
