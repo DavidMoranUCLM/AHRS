@@ -13,6 +13,7 @@
 #include "mpu9250.h"
 #include "partitionLog.h"
 #include "string.h"
+#include "tictoc.h"
 
 #define CHECK(x)                       \
   do {                                 \
@@ -20,11 +21,11 @@
     if ((__ = x) != ESP_OK) return __; \
   } while (0)
 
-#define APP_INIT_BUTTON_PIN GPIO_NUM_23
+#define APP_INIT_BUTTON_PIN GPIO_NUM_22
 
 #define I2C_PORT 0
-#define I2C_SDA 33
-#define I2C_SCL 32
+#define I2C_SDA GPIO_NUM_33
+#define I2C_SCL GPIO_NUM_32
 
 #define MEASURES_BUFFER_ITEM_NUMBER 200
 #define LOG_BUFFER_ITEM_NUMBER 200
@@ -131,7 +132,7 @@ void lockUntilPress(void) {
   gpio_set_pull_mode(APP_INIT_BUTTON_PIN, GPIO_PULLUP_ONLY);
   fprintf(stdout, "Waiting for button press.\n");
   while (gpio_get_level(APP_INIT_BUTTON_PIN) == 1) {
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -158,7 +159,7 @@ esp_err_t app_init(mpu9250_dev_t *dev, EKF_ctx_t *ekf,
   CHECK(mpu9250_init(dev));
   ESP_LOGI(TAG, "MPU9250 init success");
 
-  CHECK(mpu6050_set_dlpf_mode(dev, MPU6050_DLPF_2));
+  CHECK(mpu6050_set_dlpf_mode(dev, MPU6050_DLPF_0));
 
   calibrationData_t calibration = {0};
   CHECK(read_mpu9250_calibration(&calibration));
@@ -186,6 +187,7 @@ esp_err_t app_init(mpu9250_dev_t *dev, EKF_ctx_t *ekf,
   float mag[3];
   mpu9250_get_motion(dev, initMeasures.acc, initMeasures.velAng,
                      initMeasures.mag);
+  
   ekfInit(ekf, &initMeasures);
   ESP_LOGI(TAG, "EKF init success");
 
@@ -236,9 +238,12 @@ void measurementsProducer(void *param) {
 
   measurementsProducerCfg_t *conf = param;
 
+  tictoc_t *tictoc_i2c = tictoc_new("i2cTime");
+  configASSERT(tictoc_i2c);
+  
   TickType_t prevTick = xTaskGetTickCount();
   TickType_t prevPrevTick = prevTick;
-  measureItem_t item;
+  measureItem_t item = {0};
 
   esp_err_t err;
   while (1) {
@@ -247,9 +252,14 @@ void measurementsProducer(void *param) {
       if (xTaskDelayUntil(&prevTick, conf->taskPeriod) == pdFALSE) {
         ESP_LOGW(TAG, "Missed %ld ticks",
                  (prevTick - prevPrevTick) - conf->taskPeriod);
-      }
+      }     
+      tic(tictoc_i2c);
       item.measureTime = (float)esp_timer_get_time() * US_TO_S;
+
+      
       err = mpu9250_get_motion(conf->mpu9250, &item.acc, &item.gyro, &item.mag);
+      
+
       if (err != ESP_OK) {
         ESP_LOGW(TAG, "MPU9250 exception during reading: %s",
                  esp_err_to_name(err));
@@ -261,6 +271,7 @@ void measurementsProducer(void *param) {
       ESP_LOGW(TAG, "Buffer push exception: %s", esp_err_to_name(err));
       vTaskDelay(1);
     }
+    toc(tictoc_i2c);
 
     ESP_LOGD(TAG, "Item Pushed");
   }
@@ -272,6 +283,8 @@ void measurementsProcesor(void *param) {
   ESP_LOGI(TAG, "Task Init");
 
   measurementsProcesorCfg_t *conf = param;
+
+  tictoc_t *tictoc_ekf = tictoc_new("ekfTime");
 
   TickType_t prevTick = xTaskGetTickCount();
   TickType_t prevPrevTick = prevTick;
@@ -299,8 +312,9 @@ void measurementsProcesor(void *param) {
       ekfMeasures.velAng[1] = measureItem.gyro.y + 0.038;
       ekfMeasures.velAng[2] = measureItem.gyro.z - 0.045;
 
+      tic(tictoc_ekf);
       ekfStep(conf->ekf, &ekfMeasures, measureItem.measureTime);
-
+      toc(tictoc_ekf);
       if ((measureItem.measureTime - prevMeasureLogTime) * 1000 >= LOG_ITEM_PERIOD_MS) {
         prevMeasureLogTime = measureItem.measureTime;
 
@@ -398,7 +412,7 @@ void measurementsProcesor(void *param) {
 
 void logger(void *param) {
   const char *TAG = "LOGGER_TASK";
-  esp_log_level_set(TAG, ESP_LOG_DEBUG);
+  esp_log_level_set(TAG, ESP_LOG_INFO);
   ESP_LOGI(TAG, "Task Init");
 
   loggerCfg_t *conf = param;
@@ -467,6 +481,9 @@ void logger(void *param) {
       ESP_LOGD(TAG, "Magnetometer values: X: %.2f, Y: %.2f, Z: %.2f",
                logItem.mag[0], logItem.mag[1], logItem.mag[2]);
       ESP_LOGD(TAG, "Free heap size: %lu B", esp_get_free_heap_size());
+
+
+      //tictoc_print(NULL);
     }
 
     if (xTaskDelayUntil(&prevTick, conf->taskPeriod) == pdFALSE) {

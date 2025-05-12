@@ -5,5 +5,6 @@ idf_component_register(SRCS "main.c"
                              mpu9250
                              esp_partition
                              esp_timer
-                             partitionLog)
+                             partitionLog
+                             tictoc)
                              
