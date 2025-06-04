@@ -5,3 +5,10 @@
 [submodule "esp-idf-lib"]
 	path = esp-idf-lib
 	url = https://github.com/DavidMoranUCLM/esp-idf-lib
+[submodule "components/Neo6m-IDF32"]
+	path = components/Neo6m-IDF32
+	url = https://github.com/lawslefthand/Neo6m-IDF32
+[submodule "components/wgs84"]
+	path = components/wgs84
+	url = https://github.com/DavidMoranUCLM/wgs84
+	branch = idf
